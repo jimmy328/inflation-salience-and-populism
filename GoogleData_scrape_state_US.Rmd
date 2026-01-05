@@ -1,0 +1,162 @@
+---
+title: "data_scrape_state_level"
+author: "Jeremy Fang"
+date: "2025-08-05"
+output: html_document
+---
+
+```{r}
+# if you don’t already have remotes:
+install.packages("remotes")
+
+# install the bleeding-edge version
+remotes::install_github("PMassicotte/gtrendsR")
+
+# Restart your R session now (CTRL+SHIFT+F10 in RStudio)
+1
+```
+
+```{r}
+# 0) Install & load
+# install.packages(c("gtrendsR","dplyr"))
+library(gtrendsR)
+library(dplyr)
+
+# 1) Core settings
+search_term <- "inflation"
+timeframe   <- "2004-01-01 2025-08-01"
+cookie_path <- "~/Desktop/Populism Research/Data Prepare/google_cookies.txt"
+
+# 2) All 50 states in US-XX form
+geo_codes <- paste0("US-", state.abb)
+
+# 3) Loop, fetch, save per-state, collect in a list
+state_list <- vector("list", length(geo_codes))
+names(state_list) <- geo_codes
+
+for (geo in geo_codes) {
+  message("Fetching ", geo, " …")
+  
+  # your working pattern:
+  resB <- tryCatch(
+    gtrends(
+      keyword = search_term,
+      geo     = geo,
+      time    = timeframe,
+      gprop   = "web",
+      cookie  = cookie_path
+    ),
+    error = function(e) {
+      message("  ⚠️ Failed ", geo, ": ", e$message)
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(resB) && !is.null(resB$interest_over_time)) {
+    df <- resB$interest_over_time %>% 
+      mutate(state = geo)
+    
+    # 3a) Save each to its own CSV
+    write.csv(
+      df,
+      file   = paste0("inflation_", geo, ".csv"),
+      row.names = FALSE
+    )
+    
+    # 3b) Store for later combining
+    state_list[[geo]] <- df
+  }
+  
+  Sys.sleep(1)  # throttle between states
+}
+
+# 4) Combine all the per-state tibbles into one
+combined <- bind_rows(state_list)
+
+# 5) (Optional) rename the hits column if you like:
+# combined <- combined %>% rename(hits = inflation)
+
+# 6) Write out the master file
+write.csv(
+  combined,
+  "inflation_all_states_2004_to_2025-08-01.csv",
+  row.names = FALSE
+)
+
+message("✅ All states fetched and combined!") 
+
+```
+
+
+```{r}
+# 0) Install & load
+# install.packages(c("gtrendsR","dplyr"))
+library(gtrendsR)
+library(dplyr)
+
+# 1) Core settings
+search_terms <- c("inflation", "unemployment", "GDP")  
+timeframe   <- "2004-01-01 2025-08-01"
+cookie_path <- "~/Desktop/Populism Research/Data Prepare/google_cookies.txt"
+
+# 2) All 50 states in US-XX form
+geo_codes <- paste0("US-", state.abb)
+
+# 3) Loop, fetch, save per-state, collect in a list
+state_list <- vector("list", length(geo_codes))
+names(state_list) <- geo_codes
+
+for (geo in geo_codes) {
+  message("Fetching ", geo, " …")
+  
+  # your working pattern:
+  resB <- tryCatch(
+    gtrends(
+      keyword = search_term,
+      geo     = geo,
+      time    = timeframe,
+      gprop   = "web",
+      cookie  = cookie_path
+    ),
+    error = function(e) {
+      message("  ⚠️ Failed ", geo, ": ", e$message)
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(resB) && !is.null(resB$interest_over_time)) {
+    df <- resB$interest_over_time %>%
+      mutate(state = geo)
+    
+    # 3a) Save each to its own CSV
+    write.csv(
+      df,
+      file      = paste0("inflation_", geo, ".csv"),
+      row.names = FALSE
+    )
+    
+    # 3b) Store for later combining
+    state_list[[geo]] <- df
+  }
+  
+  Sys.sleep(5)  # ← polite 5-second pause between each state
+}
+
+# 4) Combine all the per-state tibbles into one
+combined <- bind_rows(state_list)
+
+# 5) (Optional) rename the hits column if you like:
+# combined <- combined %>% rename(hits = inflation)
+
+# 6) Write out the master file
+write.csv(
+  combined,
+  "inflation_all_states_2004_to_2025-08-01.csv",
+  row.names = FALSE
+)
+
+message("✅ All states fetched and combined!")
+
+```
+```
+

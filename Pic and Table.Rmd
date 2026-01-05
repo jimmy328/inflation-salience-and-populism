@@ -1,0 +1,244 @@
+---
+title: "Data Summary"
+author: "Jeremy Fang"
+date: "2025-08-30"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stargazer)
+library(readr)
+library(sandwich)
+library(lmtest)
+library(fixest)
+```
+
+```{r}
+df <- read.csv("~/Desktop/Populism Research/Data Summary/panel_plus_fixed_updated.csv")
+df
+```
+
+
+```{r}
+dfUS <- df%>%
+  filter(country == "US")
+
+summary(dfUS[c("pop_weighted", "infl_z_6m_mean")])
+```
+```{r}
+dfUS <- df%>%
+  filter(country == "US")
+
+summary(dfUS[c("pop_weighted", "infl_z_prev_month", "infl_z_3m_mean", "infl_z_3m_max", "infl_z_6m_mean", "gdp_nominal_eur","unemp_rate")])
+```
+
+```{r}
+# install.packages("usmap")
+# install.packages("ggplot2")
+library(usmap)
+library(ggplot2)
+
+# Rename state_po to state
+df <- df %>%
+  rename(state = state_po)
+
+df2000 <- df %>%
+  filter(year == 2000)
+
+# Now plot
+plot_usmap(data = df2020, values = "pop_weighted", regions = "states") +
+  scale_fill_continuous(low = "white", high = "red", name = "Populist Vote") +
+  theme(legend.position = "right")
+
+```
+
+```{r}
+df2024 <- df %>%
+  filter(year == 2024)
+
+# Now plot
+plot_usmap(data = df2024, values = "pop_weighted", regions = "states") +
+  scale_fill_continuous(low = "white", high = "red", name = "Populist Vote") +
+  theme(legend.position = "right")
+
+```
+
+```{r}
+
+plot_usmap(
+  data = df,
+  values = "pop_weighted",
+  regions = "states"
+) +
+  scale_fill_continuous(
+    low = "white",
+    high = "red",
+    name = "Populist vote share"
+  ) +
+  facet_wrap(~ year, ncol = 3) +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(size = 10)
+  )
+
+```
+
+```{r}
+m1 <- lm(pop_weighted ~ infl_z_3m_max, data = dfUS)
+summary(m1)
+
+
+```
+```{r}
+model1<-feols(
+  pop_weighted~infl_z_3m_max,
+  data=dfUS,
+  cluster=~state_po
+)
+summary(model1)
+```
+
+
+```{r}
+m2 <- lm(pop_weighted ~ infl_z_3m_max+factor(state_po), data = dfUS)
+summary(m2)
+
+
+```
+
+```{r}
+model2<-feols(
+  pop_weighted~infl_z_3m_max| state_po,
+  data=dfUS,
+  cluster=~state_po
+)
+summary(model2)
+```
+
+```{r}
+m3 <- lm(pop_weighted ~ infl_z_3m_max + factor(state_po) + factor(year), 
+         data = dfUS)
+summary(m3)
+
+
+```
+
+```{r}
+model3<-feols(
+  pop_weighted~infl_z_3m_max+ factor(state_po)+ factor(year),
+  data=dfUS,
+  cluster=~state_po
+)
+summary(model3)
+```
+```{r}
+
+```
+
+
+```{r}
+m4 <- lm(pop_weighted ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur +
+           factor(state_po),
+         data = dfUS)
+summary(m4)
+
+
+```
+
+```{r}
+model4<-feols(
+  pop_weighted~infl_z_3m_max+ unemp_rate + gdp_nominal_eur | state_po,
+  data=dfUS,
+  cluster=~state_po
+)
+summary(model4)
+```
+
+```{r}
+inflation_df <- data.frame(
+  year = c(2000, 2004, 2008, 2012, 2016, 2020, 2024),
+  inflation_rate = c(3.4, 3.3, 3.8, 2.1, 1.3, 1.4, 3.2)
+)
+
+dfUS <- merge(dfUS, inflation_df, by = "year", all.x = TRUE)
+dfUS
+
+```
+
+```{r}
+m5final <- lm(pop_weighted ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur +
+           factor(state_po) + inflation_rate,data = dfUS)
+summary(m5final)
+
+```
+
+```{r}
+model5<-feols(
+  pop_weighted~infl_z_3m_max+ unemp_rate + gdp_nominal_eur + inflation_rate| state_po,
+  data=dfUS,
+  cluster=~state_po
+)
+summary(model5)
+```
+
+```{r}
+m5_log_y <- lm(log(pop_weighted) ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur +
+               factor(state_po) + inflation_rate,
+               data = dfUS)
+summary(m5_log_y)
+
+```
+
+```{r}
+
+rob_base <- feols(
+  pop_weighted ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur + inflation_rate | state_po,
+  data = dfUS,
+  cluster = ~state_po
+)
+summary(rob_base)
+```
+
+```{r}
+robust_1 <- feols(
+  pop_weighted ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur + inflation_rate | state_po,
+  data = subset(dfUS, year != 2008),
+  cluster = ~state_po
+)
+summary(robust_1)
+
+```
+
+```{r}
+robust_2 <- feols(
+  pop_weighted ~ infl_z_3m_max + unemp_rate + gdp_nominal_eur + inflation_rate | state_po,
+  data = subset(dfUS, year != 2020),
+  cluster = ~state_po
+)
+summary(robust_2)
+
+```
+
+```{r}
+robust_3<- feols(
+  pop_weighted ~ infl_z_3m_mean + unemp_rate + gdp_nominal_eur + inflation_rate | state_po,
+  data = dfUS,
+  cluster = ~state_po
+)
+summary(robust_3)
+
+```
+
+```{r}
+robust_4 <- feols(
+  pop_weighted ~ infl_z_6m_mean + unemp_rate + gdp_nominal_eur + inflation_rate | state_po,
+  data = dfUS,
+  cluster = ~state_po
+)
+summary(robust_4)
+
+```
+
+
+

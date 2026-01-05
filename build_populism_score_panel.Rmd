@@ -1,0 +1,1305 @@
+---
+title: "Data_clean_0809_jeremy"
+author: "Jeremy Fang"
+date: "2025-08-09"
+output: html_document
+---
+
+```{r}
+# install.packages(c("dplyr","readr","tidyr","stringr","tibble"))  # if needed
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+library(tibble)
+
+# ---------- 1) LOOKUP TABLES (country, state_code -> state_name, state_abbrev) ----------
+
+# US (use built-ins for 50 states, then add DC if present in your data)
+us_map <- tibble(
+  country      = "US",
+  state_code   = state.abb,
+  state_name   = state.name,
+  state_abbrev = state.abb
+)
+us_map <- bind_rows(us_map,
+  tibble(country="US", state_code="DC", state_name="District of Columbia", state_abbrev="DC")
+)
+
+# Germany (DE) - 16 Länder
+de_map <- tribble(
+  ~state_code, ~state_name,                 ~state_abbrev,
+  "BW",        "Baden-Württemberg",         "BW",
+  "BY",        "Bavaria (Bayern)",          "BY",
+  "BE",        "Berlin",                    "BE",
+  "BB",        "Brandenburg",               "BB",
+  "HB",        "Bremen",                    "HB",
+  "HH",        "Hamburg",                   "HH",
+  "HE",        "Hesse (Hessen)",            "HE",
+  "MV",        "Mecklenburg-Vorpommern",    "MV",
+  "NI",        "Lower Saxony (Niedersachsen)", "NI",
+  "NW",        "North Rhine-Westphalia (Nordrhein-Westfalen)", "NW",
+  "RP",        "Rhineland-Palatinate (Rheinland-Pfalz)", "RP",
+  "SL",        "Saarland",                  "SL",
+  "SN",        "Saxony (Sachsen)",          "SN",
+  "ST",        "Saxony-Anhalt (Sachsen-Anhalt)", "ST",
+  "SH",        "Schleswig-Holstein",        "SH",
+  "TH",        "Thuringia (Thüringen)",     "TH"
+) %>% mutate(country="DE", .before=1)
+
+# Brazil (BR) - 27 federative units
+br_map <- tribble(
+  ~state_code,~state_name,                 ~state_abbrev,
+  "AC","Acre","AC","AL","Alagoas","AL","AP","Amapá","AP","AM","Amazonas","AM",
+  "BA","Bahia","BA","CE","Ceará","CE","DF","Distrito Federal","DF","ES","Espírito Santo","ES",
+  "GO","Goiás","GO","MA","Maranhão","MA","MT","Mato Grosso","MT","MS","Mato Grosso do Sul","MS",
+  "MG","Minas Gerais","MG","PA","Pará","PA","PB","Paraíba","PB","PR","Paraná","PR",
+  "PE","Pernambuco","PE","PI","Piauí","PI","RJ","Rio de Janeiro","RJ","RN","Rio Grande do Norte","RN",
+  "RS","Rio Grande do Sul","RS","RO","Rondônia","RO","RR","Roraima","RR","SC","Santa Catarina","SC",
+  "SP","São Paulo","SP","SE","Sergipe","SE","TO","Tocantins","TO"
+) %>% mutate(country="BR", .before=1)
+
+# France (FR) - 13 metropolitan regions (+ Corse)
+fr_map <- tribble(
+  ~state_code, ~state_name,                 ~state_abbrev,
+  "ARA","Auvergne–Rhône–Alpes","ARA",
+  "BFC","Bourgogne–Franche–Comté","BFC",
+  "BRE","Bretagne","BRE",
+  "CVL","Centre–Val de Loire","CVL",
+  "COR","Corse","COR",
+  "GES","Grand Est","GES",
+  "HDF","Hauts–de–France","HDF",
+  "IDF","Île–de–France","IDF",
+  "NOR","Normandie","NOR",
+  "NAQ","Nouvelle–Aquitaine","NAQ",
+  "OCC","Occitanie","OCC",
+  "PAC","Provence–Alpes–Côte d’Azur","PAC",
+  "PDL","Pays de la Loire","PDL"
+) %>% mutate(country="FR", .before=1)
+
+# Norway (NO) – historical counties (01…22)
+no_map <- tribble(
+  ~state_code,~state_name,          ~state_abbrev,
+  "01","Østfold","01","02","Akershus","02","03","Oslo","03","04","Hedmark","04",
+  "05","Oppland","05","06","Buskerud","06","07","Vestfold","07","08","Telemark","08",
+  "09","Aust-Agder","09","10","Vest-Agder","10","11","Rogaland","11","12","Hordaland","12",
+  "14","Sogn og Fjordane","14","15","Møre og Romsdal","15","16","Sør-Trøndelag","16",
+  "17","Nord-Trøndelag","17","18","Nordland","18","19","Troms","19","20","Finnmark","20",
+  "21","Svalbard","21","22","Jan Mayen","22"
+) %>% mutate(country="NO", .before=1)
+
+# Italy (IT) – 20 regions (numeric ISO suffix)
+it_map <- tribble(
+  ~state_code,~state_name,                ~state_abbrev,
+  "21","Piemonte","21","23","Valle d’Aosta","23","25","Lombardia","25","32","Veneto","32",
+  "34","Friuli Venezia Giulia","34","36","Liguria","36","42","Emilia–Romagna","42","45","Toscana","45",
+  "52","Umbria","52","55","Marche","55","57","Lazio","57","62","Abruzzo","62","67","Molise","67",
+  "72","Campania","72","75","Puglia","75","77","Basilicata","77","78","Calabria","78",
+  "82","Sicilia","82","88","Sardegna","88"
+) %>% mutate(country="IT", .before=1)
+
+# Argentina (AR) – 24 provinces (ISO letters)
+ar_map <- tribble(
+  ~state_code,~state_name,                         ~state_abbrev,
+  "B","Buenos Aires","B","K","Catamarca","K","H","Chaco","H","U","Chubut","U",
+  "X","Córdoba","X","W","Corrientes","W","E","Entre Ríos","E","P","Formosa","P",
+  "Y","Jujuy","Y","L","La Pampa","L","F","La Rioja","F","M","Mendoza","M",
+  "N","Misiones","N","Q","Neuquén","Q","R","Río Negro","R","A","Salta","A",
+  "J","San Juan","J","D","San Luis","D","Z","Santa Cruz","Z","S","Santa Fe","S",
+  "G","Santiago del Estero","G","V","Tierra del Fuego","V","T","Tucumán","T","C","Ciudad Autónoma de Buenos Aires (CABA)","C"
+) %>% mutate(country="AR", .before=1)
+
+# Finland (FI) – 19 regions
+fi_map <- tribble(
+  ~state_code,~state_name,                 ~state_abbrev,
+  "01","Åland (Ahvenanmaa)","01","02","Etelä-Karjala (South Karelia)","02",
+  "03","Etelä-Pohjanmaa (South Ostrobothnia)","03","04","Etelä-Savo (South Savo)","04",
+  "05","Kainuu","05","06","Kanta-Häme (Tavastia Proper)","06","07","Keski-Pohjanmaa (Central Ostrobothnia)","07",
+  "08","Keski-Suomi (Central Finland)","08","09","Kymenlaakso","09","10","Lappi (Lapland)","10",
+  "11","Pirkanmaa","11","12","Pohjanmaa (Ostrobothnia)","12","13","Pohjois-Karjala (North Karelia)","13",
+  "14","Pohjois-Pohjanmaa (North Ostrobothnia)","14","15","Pohjois-Savo (North Savo)","15",
+  "16","Päijät-Häme","16","17","Satakunta","17","18","Uusimaa","18","19","Varsinais-Suomi (Southwest Finland)","19"
+) %>% mutate(country="FI", .before=1)
+
+# Netherlands (NL) – 12 provinces
+nl_map <- tribble(
+  ~state_code,~state_name,       ~state_abbrev,
+  "DR","Drenthe","DR","FL","Flevoland","FL","FR","Fryslân (Friesland)","FR","GE","Gelderland","GE",
+  "GR","Groningen","GR","LI","Limburg","LI","NB","Noord-Brabant","NB","NH","Noord-Holland","NH",
+  "OV","Overijssel","OV","UT","Utrecht","UT","ZE","Zeeland","ZE","ZH","Zuid-Holland","ZH"
+) %>% mutate(country="NL", .before=1)
+
+# Denmark (DK) – 5 regions
+dk_map <- tribble(
+  ~state_code,~state_name,        ~state_abbrev,
+  "81","Nordjylland","81","82","Midtjylland","82","83","Syddanmark","83","84","Hovedstaden","84","85","Sjælland","85"
+) %>% mutate(country="DK", .before=1)
+
+# Combine all lookups
+lookup <- bind_rows(
+  us_map,
+  de_map,
+  br_map,
+  fr_map,
+  no_map,
+  it_map,
+  ar_map,
+  fi_map,
+  nl_map,
+  dk_map
+)
+
+# ---------- 2) DECODER FUNCTION ----------
+
+decode_file <- function(path) {
+  # infer the country tag from the filename (df_wide_complete_XXXX_inflation.csv)
+  country_hint <- str_match(basename(path),
+                            "^df_wide_complete_([A-Za-z]+)_inflation\\.csv$")[,2]
+
+  df <- read_csv(path, show_col_types = FALSE)
+
+  # expect columns: state, Year, Month, inflation
+  out <- df %>%
+    rename(state_iso = state) %>%                        # keep original ISO like "US-CA"
+    separate(state_iso, into = c("country","state_code"), sep = "-", fill = "right") %>%
+    mutate(country = coalesce(country, country_hint)) %>%  # fall back to filename if needed
+    left_join(lookup, by = c("country","state_code")) %>%
+    # if lookup missing (rare), keep code as name to avoid NA
+    mutate(
+      state_name   = coalesce(state_name, state_code),
+      state_abbrev = coalesce(state_abbrev, state_code)
+    ) %>%
+    relocate(country, state_name, state_abbrev, state_code, Year, Month, inflation)
+
+  out_file <- sub("\\.csv$", "_decoded.csv", path)
+  write_csv(out, out_file)
+  message("✅ Wrote: ", out_file)
+  invisible(out)
+}
+
+# ---------- 3) BATCH ALL YOUR FILES ----------
+
+files <- list.files(pattern = "^df_wide_complete_[A-Za-z]+_inflation\\.csv$", full.names = TRUE)
+decoded <- lapply(files, decode_file)
+
+# (Optional) combine everything in memory
+all_decoded <- bind_rows(decoded)
+
+
+```
+
+```{r}
+setwd("/Users/wangxinyi/Desktop/Jeremy/data")
+write_csv(all_decoded, "df_wide_all_countries_decoded.csv")
+```
+
+# Election CSV (president)
+```{r}
+# install.packages(c("tibble","dplyr","readr","lubridate"))  # if needed
+library(tibble)
+library(dplyr)
+library(readr)
+library(lubridate)
+
+# Helper: make rows from year-month strings
+mk <- function(country, ym_vec, type) {
+  tibble(
+    country       = country,                 # ISO-2 preferred: US, DE, BR, FR, NO, IT, AR, FI, NL, DK
+    election_id   = paste0(country, "_", ym_vec, "_", ifelse(type=="presidential","pres","parl")),
+    election_date = as.Date(paste0(ym_vec, "-01")),
+    election_type = type
+  )
+}
+
+# --- Define national election months (month-level; sufficient for lagging) ---
+
+# United States (presidential, Nov every 4 years)
+us <- mk("US", c("2004-11","2008-11","2012-11","2016-11","2020-11","2024-11"), "presidential")
+
+# Germany (Bundestag, typically Sep)
+de <- mk("DE", c("2005-09","2009-09","2013-09","2017-09","2021-09"), "parliamentary")
+
+# Brazil (presidential, Oct)
+br <- mk("BR", c("2006-10","2010-10","2014-10","2018-10","2022-10"), "presidential")
+
+# France (presidential, first round typically Apr)
+fr <- mk("FR", c("2007-04","2012-04","2017-04","2022-04"), "presidential")
+
+# Norway (parliamentary, Sep)
+no <- mk("NO", c("2005-09","2009-09","2013-09","2017-09","2021-09"), "parliamentary")
+
+# Italy (parliamentary; 2006 Apr, 2008 Apr, 2013 Feb, 2018 Mar, 2022 Sep)
+it <- mk("IT", c("2006-04","2008-04","2013-02","2018-03","2022-09"), "parliamentary")
+
+# Argentina (presidential, Oct)
+ar <- mk("AR", c("2007-10","2011-10","2015-10","2019-10","2023-10"), "presidential")
+
+# Finland (presidential, Jan)
+fi <- mk("FI", c("2006-01","2012-01","2018-01","2024-01"), "presidential")
+
+# Netherlands (Tweede Kamer, parliamentary; months vary)
+nl <- mk("NL", c("2006-11","2010-06","2012-09","2017-03","2021-03","2023-11"), "parliamentary")
+
+# Denmark (Folketing, parliamentary; months vary)
+dk <- mk("DK", c("2005-02","2007-11","2011-09","2015-06","2019-06","2022-11"), "parliamentary")
+
+# --- Bind and save ---
+elections <- bind_rows(us, de, br, fr, no, it, ar, fi, nl, dk) %>%
+  arrange(country, election_date)
+
+write_csv(elections, "elections.csv")
+message("✅ Wrote elections.csv")
+
+# Quick peek
+print(elections, n = nrow(elections))
+
+```
+
+# Lag inflation search data before election
+```{r}
+# install.packages(c("dplyr","readr","lubridate","slider","tidyr")) # if needed
+library(dplyr)
+library(readr)
+library(lubridate)
+library(slider)
+library(tidyr)
+
+# ------------------------------------------------------------------
+# 1) Load monthly Google Trends data (your raw “df_wide_all_countries_decoded.csv”)
+# ------------------------------------------------------------------
+trends <- read_csv("df_wide_all_countries_decoded.csv", show_col_types = FALSE)
+
+# Expect: country, state_name, state_abbrev, Year, Month, inflation
+# Build a unit id and a proper monthly date (first of month)
+trends <- trends %>%
+  mutate(
+    unit_id = if_else(is.na(state_abbrev) | state_abbrev == "",
+                      country, paste(country, state_abbrev, sep = "-")),
+    date = make_date(Year, Month, 1)
+  ) %>%
+  arrange(unit_id, date)
+
+# ------------------------------------------------------------------
+# 2) Standardize the index within unit and create trailing MAs
+# ------------------------------------------------------------------
+# Why: Google Trends is 0–100 per query×place×window, so models should use
+# within-unit deviations (z-score). We then compute trailing moving averages.
+
+trends_feats <- trends %>%
+  group_by(unit_id) %>%
+  mutate(
+    infl_z = (inflation - mean(inflation, na.rm = TRUE)) /
+             sd(inflation, na.rm = TRUE),
+
+    # trailing (backward-looking) moving averages in *months*
+    # 3-month average of infl_z using the current month and previous 2 months
+    ma3  = slide_dbl(infl_z, mean, .before = 2, .complete = TRUE),
+    # 6-month average (current + previous 5)
+    ma6  = slide_dbl(infl_z, mean, .before = 5, .complete = TRUE)
+  ) %>%
+  ungroup()
+
+# ------------------------------------------------------------------
+# 3) Load elections and create the "anchor" month BEFORE each election
+# ------------------------------------------------------------------
+# elections.csv columns required:
+#   country, election_id, election_date (YYYY-MM-DD)
+elections <- read_csv("elections.csv", show_col_types = FALSE) %>%
+  mutate(
+    election_date = as_date(election_date),
+    # we anchor to the month **before** the election month:
+    anchor_month  = floor_date(election_date, "month") %m-% months(1)
+  )
+
+# ------------------------------------------------------------------
+# 4) Replicate elections to every unit in that country (if needed)
+# ------------------------------------------------------------------
+units_by_country <- trends_feats %>%
+  distinct(country, unit_id)
+
+elections_units <- elections %>%
+  left_join(units_by_country, by = "country")  # one row per (election × unit)
+
+# ------------------------------------------------------------------
+# 5) Join the pre-election features:
+#    take the moving averages evaluated AT the anchor month
+# ------------------------------------------------------------------
+pre_elec <- elections_units %>%
+  left_join(
+    trends_feats %>%
+      select(unit_id, date, infl_z, ma3, ma6),
+    by = c("unit_id" = "unit_id", "anchor_month" = "date")
+  ) %>%
+  rename(
+    infl_z_prev_month = infl_z,
+    infl_3m_pre       = ma3,  # last 3 months through the month before election
+    infl_6m_pre       = ma6   # last 6 months through the month before election
+  )
+
+# (Optional) add additional pre-election summaries:
+# e.g., max over last 3 months, slope over last 6 months, etc.
+# Example: compute 3-month max using a rolling op, then take the value at anchor_month.
+trends_extra <- trends_feats %>%
+  group_by(unit_id) %>%
+  mutate(
+    max3 = slide_dbl(infl_z, ~max(.x, na.rm = TRUE), .before = 2, .complete = TRUE)
+  ) %>% ungroup()
+
+pre_elec <- pre_elec %>%
+  select(-infl_z_prev_month, -infl_3m_pre, -infl_6m_pre) %>%
+  left_join(
+    trends_extra %>% select(unit_id, date, infl_z, ma3, ma6, max3),
+    by = c("unit_id" = "unit_id", "anchor_month" = "date")
+  ) %>%
+  rename(
+    infl_z_prev_month = infl_z,
+    infl_3m_pre       = ma3,
+    infl_6m_pre       = ma6,
+    infl_3m_max_pre   = max3
+  )
+
+# ------------------------------------------------------------------
+# 6) Keep a clean modeling table and save
+# ------------------------------------------------------------------
+model_ready <- pre_elec %>%
+  select(country, unit_id, election_id, election_date,
+         infl_z_prev_month, infl_3m_pre, infl_6m_pre, infl_3m_max_pre)
+
+write_csv(model_ready, "inflation_salience_pre_election.csv")
+message("✅ Wrote inflation_salience_pre_election.csv")
+
+# You can now merge `inflation_salience_pre_election.csv` with your
+# vote-share / populism-score election data by (country, unit_id, election_id).
+
+```
+
+```{r}
+model_ready
+```
+
+
+
+# state candidate_shares and state party share
+```{r}
+library(tidyverse)
+# If you have janitor installed this helps, otherwise comment it out
+# library(janitor)
+
+# 1) Load
+path <- "countypres_2000-2024.csv"   # adjust to your filename
+raw <- readr::read_csv(path, show_col_types = FALSE) %>%
+  # janitor::clean_names() %>%  # optional
+  mutate(
+    year       = as.integer(year),
+    state_po   = toupper(state_po),
+    candidate  = str_squish(candidate),
+    party      = toupper(str_squish(party)),
+    office     = toupper(str_squish(office)),
+    mode       = toupper(str_squish(mode)),
+    # standardize TOTAL-like labels
+    mode_std   = case_when(
+      mode %in% c("TOTAL", "TOTAL VOTES", "TOTALVOTES", "ALL MODES") ~ "TOTAL",
+      TRUE ~ mode
+    )
+  ) %>%
+  filter(office == "US PRESIDENT")
+
+# 2) County-candidate votes
+# For each (year,state,county,candidate), prefer the TOTAL row if present;
+# otherwise sum across modes (ignore over/undervotes).
+cand_cty <- raw %>%
+  filter(!candidate %in% c("OVERVOTES", "UNDERVOTES")) %>%
+  group_by(year, state_po, county_fips, candidate, party) %>%
+  summarise(
+    votes_from_total = sum(candidatevotes[mode_std == "TOTAL"], na.rm = TRUE),
+    votes_by_modes   = sum(candidatevotes[!(mode_std %in% c("TOTAL", "OVERVOTES", "UNDERVOTES"))],
+                           na.rm = TRUE),
+    candidate_votes  = if_else(votes_from_total > 0, votes_from_total, votes_by_modes),
+    .groups = "drop"
+  ) %>%
+  select(year, state_po, county_fips, candidate, party, candidate_votes)
+
+# 3) State totals (dedupe each county’s totalvotes first)
+state_totals <- raw %>%
+  distinct(year, state_po, county_fips, totalvotes) %>%
+  group_by(year, state_po) %>%
+  summarise(state_totalvotes = sum(totalvotes, na.rm = TRUE), .groups = "drop")
+
+# 4) Candidate shares by state-year
+state_candidate_shares <- cand_cty %>%
+  group_by(year, state_po, candidate) %>%
+  summarise(candidate_votes = sum(candidate_votes, na.rm = TRUE), .groups = "drop") %>%
+  left_join(state_totals, by = c("year", "state_po")) %>%
+  mutate(candidate_share = candidate_votes / state_totalvotes)
+
+# 5) Party shares by state-year (simple party mapping)
+state_party_shares <- cand_cty %>%
+  mutate(party_simple = case_when(
+    str_detect(party, "DEMOCRAT")    ~ "DEMOCRAT",
+    str_detect(party, "REPUBLICAN")  ~ "REPUBLICAN",
+    str_detect(party, "LIBERTARIAN") ~ "LIBERTARIAN",
+    TRUE                             ~ "OTHER"
+  )) %>%
+  group_by(year, state_po, party_simple) %>%
+  summarise(party_votes = sum(candidate_votes, na.rm = TRUE), .groups = "drop") %>%
+  left_join(state_totals, by = c("year", "state_po")) %>%
+  mutate(party_share = party_votes / state_totalvotes)
+
+# 6) Quick checks — you should now see 2024
+state_candidate_shares %>% filter(year == 2024) %>% arrange(state_po, desc(candidate_share)) %>% print(n = 10)
+state_party_shares     %>% filter(year == 2024) %>% arrange(state_po, desc(party_share))     %>% print(n = 10)
+
+
+```
+
+```{r}
+# save
+write_csv(state_candidate_shares, "us_state_candidate_shares_2000_2024.csv")
+write_csv(state_party_shares,     "us_state_party_shares_2000_2024.csv")
+```
+
+```{r}
+#check
+state_candidate_shares
+state_party_shares
+```
+
+# populism share
+
+```{r}
+# --- packages ---
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(purrr)
+
+gps_path <- "Global Party Survey by Party SPSS V2_1_Apr_2020-2.csv"
+gpd_path <- "gpd_v2_20220427.csv"
+
+# ---------- helpers ----------
+pick_col <- function(df, choices = character(), regex = NULL, required = FALSE, label = "column") {
+  nm <- names(df)
+  cand <- intersect(choices, nm)
+  if (length(cand) == 0 && !is.null(regex)) {
+    cand <- nm[str_detect(tolower(nm), regex)]
+  }
+  if (length(cand) > 0) return(cand[1])
+  if (required) stop(paste0("Could not find ", label, ". Available columns are:\n", paste(nm, collapse = ", ")))
+  return(NULL)
+}
+
+norm_upper <- function(x) toupper(str_squish(x))
+
+# US presidential election years
+us_elec_years <- c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+
+# 50 states + DC
+state_po <- c(state.abb, "DC")
+
+# ---------- 1) PARTY POPULISM (GPS) ----------
+gps_raw <- read_csv(gps_path, show_col_types = FALSE)
+
+# detect key columns
+party_name_var <- pick_col(
+  gps_raw,
+  choices = c("PARTYNAME","party_name","PartyName","Party","party"),
+  regex   = "^party(_?name)?$|^party$",
+  required = TRUE, label = "party name"
+)
+
+party_abbrev_var <- pick_col(
+  gps_raw,
+  choices = c("PARTYABB","party_abbrev","PartyAbbrev","abbr","acronym"),
+  regex   = "abbr|acronym|short|^party[_-]?abbr",
+  required = FALSE, label = "party abbreviation"
+)
+
+# ISO/country columns (to filter USA)
+iso_col <- pick_col(
+  gps_raw,
+  choices = c("ISO","iso","country_iso3","country_iso"),
+  regex   = "iso",
+  required = FALSE, label = "ISO"
+)
+country_name_col <- pick_col(
+  gps_raw,
+  choices = c("COUNTRY","country","country_name"),
+  regex   = "^country",
+  required = FALSE, label = "country"
+)
+
+# item columns V18..V21 (0-10)
+v18_col <- pick_col(gps_raw, choices = c("V18","v18"), regex="^v18$", required = TRUE, label="V18")
+v19_col <- pick_col(gps_raw, choices = c("V19","v19"), regex="^v19$", required = TRUE, label="V19")
+v20_col <- pick_col(gps_raw, choices = c("V20","v20"), regex="^v20$", required = TRUE, label="V20")
+v21_col <- pick_col(gps_raw, choices = c("V21","v21"), regex="^v21$", required = TRUE, label="V21")
+
+# survey year if present (some GPS files have a wave/year)
+survey_year_var <- pick_col(
+  gps_raw,
+  choices = c("YEAR","SurveyYear","WAVEYEAR","wave_year","survey_year"),
+  regex   = "year|wave",
+  required = FALSE, label = "survey year"
+)
+
+gps <- gps_raw %>%
+  mutate(
+    party_name   = str_squish(.data[[party_name_var]]),
+    party_abbrev = if (!is.null(party_abbrev_var)) toupper(.data[[party_abbrev_var]]) else NA_character_,
+    v18 = suppressWarnings(as.numeric(.data[[v18_col]])),
+    v19 = suppressWarnings(as.numeric(.data[[v19_col]])),
+    v20 = suppressWarnings(as.numeric(.data[[v20_col]])),
+    v21 = suppressWarnings(as.numeric(.data[[v21_col]]))
+  ) %>%
+  mutate(
+    # mean of the four 0–10 items → party_populism_0_10
+    party_populism_0_10 = rowMeans(select(., v18, v19, v20, v21), na.rm = TRUE)
+  )
+
+# Keep rows for the United States
+gps_us <- gps %>%
+  mutate(
+    iso_guess = if (!is.null(iso_col)) norm_upper(.data[[iso_col]]) else NA_character_,
+    ctry_guess = if (!is.null(country_name_col)) norm_upper(.data[[country_name_col]]) else NA_character_
+  ) %>%
+  filter(
+    (!is.na(iso_guess) & iso_guess %in% c("USA","US","840")) |
+    (!is.na(ctry_guess) & ctry_guess %in% c("UNITED STATES","UNITED STATES OF AMERICA","USA","US"))
+  )
+
+# Choose a survey year per row if provided (else NA)
+if (!is.null(survey_year_var)) {
+  gps_us <- gps_us %>% mutate(survey_year = suppressWarnings(as.integer(.data[[survey_year_var]])))
+} else {
+  gps_us <- gps_us %>% mutate(survey_year = NA_integer_)
+}
+
+# Map to DEM/REP using name or abbrev
+gps_us <- gps_us %>%
+  mutate(
+    party_key = case_when(
+      !is.na(party_abbrev) & party_abbrev %in% c("DEM","DEMOCRAT","DEMOCRATIC","D") ~ "DEM",
+      !is.na(party_abbrev) & party_abbrev %in% c("REP","REPUBLICAN","R") ~ "REP",
+      str_detect(norm_upper(party_name), "DEMOCRAT") ~ "DEM",
+      str_detect(norm_upper(party_name), "REPUBLICAN") ~ "REP",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(party_key))
+
+# collapse to one score per party and survey year
+gps_us_party_year <- gps_us %>%
+  group_by(party_key, survey_year) %>%
+  summarize(party_populism_0_10 = mean(party_populism_0_10, na.rm = TRUE), .groups = "drop")
+
+# If survey_years are missing, keep a single average level per party
+gps_us_party_single <- gps_us %>%
+  group_by(party_key) %>%
+  summarize(party_populism_0_10 = mean(party_populism_0_10, na.rm = TRUE), .groups = "drop") %>%
+  mutate(survey_year = NA_integer_)
+
+# function: pick the nearest survey year to each election year (fallback to single mean)
+nearest_by_party <- function(df_party_year, party_key, election_year) {
+  cand <- df_party_year %>% filter(party_key == !!party_key, !is.na(survey_year))
+  if (nrow(cand) == 0) {
+    return(gps_us_party_single %>% filter(party_key == !!party_key) %>% pull(party_populism_0_10) %>% first())
+  }
+  cand %>% mutate(dist = abs(survey_year - election_year)) %>%
+    arrange(dist, desc(survey_year)) %>%
+    slice(1) %>%
+    pull(party_populism_0_10) %>% first()
+}
+
+# build state x election-year grid, attach DEM/REP columns
+party_pop_state_year <- tidyr::crossing(
+  state_po = state_po,
+  year = us_elec_years
+) %>%
+  mutate(
+    populism_dem = map_dbl(year, ~ nearest_by_party(gps_us_party_year, "DEM", .x)),
+    populism_rep = map_dbl(year, ~ nearest_by_party(gps_us_party_year, "REP", .x))
+  )
+
+# save
+write_csv(party_pop_state_year, "us_party_populism_state_year.csv")
+
+# ---------- 2) LEADER POPULISM (GPD) ----------
+gpd_raw <- read_csv(gpd_path, show_col_types = FALSE)
+
+# detect key columns in the GPD file
+leader_col <- pick_col(gpd_raw,
+  choices = c("leader","Leader","LEADER","name"),
+  regex = "leader|name", required = TRUE, label = "leader"
+)
+country_col <- pick_col(gpd_raw,
+  choices = c("country","Country","COUNTRY"),
+  regex = "country", required = TRUE, label = "country"
+)
+start_col <- pick_col(gpd_raw,
+  choices = c("startofterm","startyear","start_year","termstart"),
+  regex = "start", required = FALSE, label = "term start"
+)
+end_col <- pick_col(gpd_raw,
+  choices = c("endofterm","endyear","end_year","termend"),
+  regex = "end", required = FALSE, label = "term end"
+)
+score_col <- pick_col(gpd_raw,
+  choices = c("totalaverage","TotalAverage","populism","Populism"),
+  regex = "total|populism", required = TRUE, label = "leader populism score"
+)
+
+gpd_us <- gpd_raw %>%
+  filter(norm_upper(.data[[country_col]]) %in% c("UNITED STATES","UNITED STATES OF AMERICA","USA","US")) %>%
+  transmute(
+    leader_name = str_squish(.data[[leader_col]]),
+    leader_populism_0_10 = suppressWarnings(as.numeric(.data[[score_col]])),
+    start_year = if (!is.null(start_col)) suppressWarnings(as.integer(str_sub(as.character(.data[[start_col]]),1,4))) else NA_integer_,
+    end_year   = if (!is.null(end_col))   suppressWarnings(as.integer(str_sub(as.character(.data[[end_col]]),1,4)))   else NA_integer_
+  ) %>%
+  group_by(leader_name) %>%
+  summarize(leader_populism_0_10 = mean(leader_populism_0_10, na.rm = TRUE), .groups = "drop")
+
+# Nominee mapping (major-party presidential nominees)
+nominees_us <- tribble(
+  ~year, ~party_key, ~leader_name,
+  2000, "DEM", "Al Gore",
+  2000, "REP", "George W. Bush",
+  2004, "DEM", "John Kerry",
+  2004, "REP", "George W. Bush",
+  2008, "DEM", "Barack Obama",
+  2008, "REP", "John McCain",
+  2012, "DEM", "Barack Obama",
+  2012, "REP", "Mitt Romney",
+  2016, "DEM", "Hillary Clinton",
+  2016, "REP", "Donald Trump",
+  2020, "DEM", "Joe Biden",
+  2020, "REP", "Donald Trump",
+  2024, "DEM", "Kamala Harris",
+  2024, "REP", "Donald Trump"
+) %>%
+  mutate(leader_name = str_squish(leader_name))
+
+# join to GPD (note: if some names differ in GPD, add fixups here)
+leader_scores_us <- nominees_us %>%
+  left_join(gpd_us, by = "leader_name")
+
+# spread to state grid (replicate across states)
+leader_pop_state_year <- tidyr::crossing(
+  state_po = state_po,
+  year = us_elec_years
+) %>%
+  left_join(
+    leader_scores_us %>% select(year, party_key, leader_populism_0_10) %>%
+      pivot_wider(names_from = party_key, values_from = leader_populism_0_10, names_prefix = "leader_"),
+    by = "year"
+  )
+# columns: leader_DEM, leader_REP (0–10), per state-year
+
+write_csv(leader_pop_state_year, "us_leader_populism_state_year.csv")
+
+cat("✅ Wrote:\n  - us_party_populism_state_year.csv\n  - us_leader_populism_state_year.csv\n")
+
+```
+
+```{r}
+leader_pop_state_year
+```
+
+####################### end here
+```{r}
+# ── Packages ────────────────────────────────────────────────────────────────
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(readr)
+library(lubridate)
+
+# ── File paths (edit these) ────────────────────────────────────────────────
+# GPS = Global Party Survey file (CSV or RDS you exported)
+gps_path <- "Global Party Survey by Party SPSS V2_1_Apr_2020-2.csv"      # e.g., columns include ISO, COUNTRY, PARTYNAME, PARTYABB, V8_Scale, V9, V18:V21, maybe YEAR
+# GPD = Global Populism Database (leader-term file)
+gpd_path <- "gpd_v2_20220427.csv"      # e.g., columns include Country, Leader, term, startofterm, endofterm, totalaverage
+
+# Where to save outputs
+out_party  <- "party_pop_state_year.csv"
+out_leader <- "leader_pop_state_year.csv"
+
+# ── Helper: safe upper/trim ────────────────────────────────────────────────
+norm_upper <- function(x) str_squish(str_to_upper(as.character(x)))
+norm_name  <- function(x) str_replace_all(norm_upper(x), "[^A-Z ]", "")
+
+# ── Read and rename GPS (party-level) ──────────────────────────────────────
+gps_raw <- readr::read_csv(gps_path, show_col_types = FALSE)
+
+# Try to find a survey year column if it exists; otherwise mark NA
+year_col <- c("YEAR","SurveyYear","WAVEYEAR","wave_year")
+gps_has_year <- any(year_col %in% names(gps_raw))
+if (gps_has_year) {
+  survey_year_var <- year_col[year_col %in% names(gps_raw)][1]
+} else {
+  survey_year_var <- NA_character_
+}
+
+gps <- gps_raw %>%
+  rename(
+    country_iso3 = any_of(c("ISO","iso3","iso")),
+    country_name = any_of(c("COUNTRY","country")),
+    party_name   = any_of(c("PARTYNAME","party_name","PartyName")),
+    party_abbrev = any_of(c("PARTYABB","party_abbrev","PartyAbbrev")),
+    populism_rhetoric_0_10   = any_of(c("V8_Scale","v8_scale")),
+    populism_salience_0_10   = any_of(c("V9","v9")),
+    rhet_will_of_people_0_10 = any_of(c("V18","v18")),
+    rhet_people_decide_0_10  = any_of(c("V19","v19")),
+    rhet_politicians_corrupt_0_10 = any_of(c("V20","v20")),
+    rhet_strong_leader_0_10  = any_of(c("V21","v21"))
+  ) %>%
+  mutate(
+    party_name   = str_squish(party_name),
+    party_abbrev = toupper(party_abbrev),
+    survey_year  = if (!is.na(survey_year_var)) !!sym(survey_year_var) else NA_integer_
+  )
+
+# Keep U.S. parties and map to DEM/REP (you can add Green/Libertarian if useful)
+gps_us <- gps %>%
+  filter(country_iso3 %in% c("USA","US","840") | country_name %in% c("UNITED STATES","UNITED STATES OF AMERICA")) %>%
+  mutate(
+    party_key = case_when(
+      str_detect(norm_upper(party_name), "DEMOCRAT")   ~ "DEM",
+      str_detect(norm_upper(party_name), "REPUBLICAN") ~ "REP",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(party_key)) %>%
+  # keep one row per party_key (if multiple survey years exist, keep the most recent)
+  arrange(party_key, desc(coalesce(survey_year, 0L))) %>%
+  distinct(party_key, .keep_all = TRUE) %>%
+  select(
+    party_key, party_name, party_abbrev, survey_year,
+    populism_rhetoric_0_10, populism_salience_0_10,
+    rhet_will_of_people_0_10, rhet_people_decide_0_10,
+    rhet_politicians_corrupt_0_10, rhet_strong_leader_0_10
+  )
+
+# ── U.S. state × election year scaffold ────────────────────────────────────
+us_states <- c(state.abb, "DC")            # include DC if you want
+election_years <- c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+
+state_year <- tidyr::expand_grid(
+  state = us_states,
+  year  = election_years
+)
+
+# ── PARTY PANEL: replicate GPS party score to each state×year ──────────────
+party_panel <- state_year %>%
+  crossing(party_key = c("DEM","REP")) %>%
+  left_join(gps_us, by = "party_key") %>%
+  # keep tidy set of variables you’ll actually use downstream
+  select(
+    state, year, party_key,
+    party_name, party_abbrev, survey_year,
+    populism_rhetoric_0_10, populism_salience_0_10,
+    rhet_will_of_people_0_10, rhet_people_decide_0_10,
+    rhet_politicians_corrupt_0_10, rhet_strong_leader_0_10
+  ) %>%
+  arrange(state, year, party_key)
+
+# ── Read and rename GPD (leader-level) ─────────────────────────────────────
+gpd_raw <- readr::read_csv(gpd_path, show_col_types = FALSE)
+
+gpd <- gpd_raw %>%
+  rename(
+    country_name        = any_of(c("Country","country")),
+    leader_name         = any_of(c("Leader","leader")),
+    leader_term         = any_of(c("term","Term")),
+    term_start          = any_of(c("startofterm","term_start")),
+    term_end            = any_of(c("endofterm","term_end")),
+    populism_leader_0_2 = any_of(c("totalaverage","TotalAverage"))
+  ) %>%
+  mutate(
+    populism_leader_0_10 = populism_leader_0_2 * 5,
+    country_name = norm_upper(country_name),
+    leader_name  = str_squish(leader_name)
+  )
+
+# Keep U.S. presidents only
+gpd_us <- gpd %>%
+  filter(country_name %in% c("UNITED STATES","UNITED STATES OF AMERICA"))
+
+# Map each presidential election year to the winner’s name
+winners <- tibble::tribble(
+  ~year, ~leader_winner,
+  2000, "George W. Bush",
+  2004, "George W. Bush",
+  2008, "Barack Obama",
+  2012, "Barack Obama",
+  2016, "Donald Trump",
+  2020, "Joe Biden",
+  2024, "Donald Trump"
+) %>%
+  mutate(leader_norm = norm_name(leader_winner))
+
+# Prepare leaders with a normalized matching key
+leaders_key <- gpd_us %>%
+  mutate(leader_norm = norm_name(leader_name)) %>%
+  select(leader_norm, leader_name, leader_term, term_start, term_end,
+         populism_leader_0_2, populism_leader_0_10) %>%
+  distinct()
+
+# Attach winner’s leader populism to every state×year row
+leader_panel <- state_year %>%
+  left_join(winners, by = "year") %>%
+  left_join(leaders_key, by = "leader_norm") %>%
+  select(
+    state, year,
+    leader_winner,
+    populism_leader_0_2, populism_leader_0_10,
+    leader_term, term_start, term_end
+  ) %>%
+  arrange(state, year)
+
+# ── Save panels ────────────────────────────────────────────────────────────
+readr::write_csv(party_panel,  out_party)
+readr::write_csv(leader_panel, out_leader)
+
+cat("✓ Wrote:\n  -", out_party, "\n  -", out_leader, "\n")
+
+# ── (Optional) Example merge with your inflation file ──────────────────────
+# infl <- read_csv("all_decoded.csv")  # must have columns: state (US-XX or XX), Year
+# If your inflation file stores state as "US-CA", strip the "US-".
+# infl <- infl %>% mutate(state = ifelse(str_detect(state, "^US-"), str_sub(state, 4, 5), state),
+#                         year  = Year)
+# merged <- infl %>%
+#   left_join(party_panel %>% filter(party_key == "REP"), by = c("state","year")) %>%
+#   left_join(party_panel %>% filter(party_key == "DEM"),
+#             by = c("state","year"),
+#             suffix = c("_REP","_DEM")) %>%
+#   left_join(leader_panel, by = c("state","year"))
+# write_csv(merged, "inflation_plus_populism.csv")
+
+```
+
+```{r}
+# ── Packages ────────────────────────────────────────────────────────────────
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(readr)
+library(lubridate)
+
+# ── File paths (edit these) ─────────────────────────────────────────────────
+gps_path <- "Global Party Survey by Party SPSS V2_1_Apr_2020-2.csv"      # e.g., columns include ISO, COUNTRY, PARTYNAME, PARTYABB, V8_Scale, V9, V18:V21, maybe YEAR
+# GPD = Global Populism Database (leader-term file)
+gpd_path <- "gpd_v2_20220427.csv"      # e.g., columns include Country, Leader, term, startofterm, endofterm, totalaverage
+
+# Where to save outputs
+out_party  <- "US_party_pop_state_year.csv"
+out_leader <- "US_leader_pop_state_year.csv"
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+norm_upper <- function(x) str_squish(str_to_upper(as.character(x)))
+norm_name  <- function(x) str_replace_all(norm_upper(x), "[^A-Z ]", "")
+
+# ── Read & rename GPS (party level) ────────────────────────────────────────
+gps_raw <- readr::read_csv(gps_path, show_col_types = FALSE)
+
+# Try to find a survey-year column, if any
+year_candidates <- c("YEAR","SurveyYear","WAVEYEAR","wave_year")
+has_year <- any(year_candidates %in% names(gps_raw))
+if (has_year) {
+  survey_year_var <- year_candidates[year_candidates %in% names(gps_raw)][1]
+} else {
+  survey_year_var <- NULL
+}
+
+gps <- gps_raw %>%
+  rename(
+    country_iso3 = any_of(c("ISO","iso3","iso")),
+    country_name = any_of(c("COUNTRY","country")),
+    party_name   = any_of(c("PARTYNAME","party_name","PartyName")),
+    party_abbrev = any_of(c("PARTYABB","party_abbrev","PartyAbbrev")),
+    populism_rhetoric_0_10   = any_of(c("V8_Scale","v8_scale")),
+    populism_salience_0_10   = any_of(c("V9","v9")),
+    rhet_will_of_people_0_10 = any_of(c("V18","v18")),
+    rhet_people_decide_0_10  = any_of(c("V19","v19")),
+    rhet_politicians_corrupt_0_10 = any_of(c("V20","v20")),
+    rhet_strong_leader_0_10  = any_of(c("V21","v21"))
+  ) %>%
+  mutate(
+    party_name   = str_squish(party_name),
+    party_abbrev = toupper(party_abbrev)
+  )
+
+# Create survey_year safely (no !!sym())
+if (has_year) {
+  gps <- gps %>% mutate(survey_year = as.integer(.data[[survey_year_var]]))
+} else {
+  gps <- gps %>% mutate(survey_year = NA_integer_)
+}
+
+# Keep U.S. DEM/REP only (extend if you want more parties)
+gps_us <- gps %>%
+  filter(
+    country_iso3 %in% c("USA","US","840") |
+      norm_upper(country_name) %in% c("UNITED STATES","UNITED STATES OF AMERICA")
+  ) %>%
+  mutate(
+    party_key = case_when(
+      str_detect(norm_upper(party_name), "DEMOCRAT")   ~ "DEM",
+      str_detect(norm_upper(party_name), "REPUBLICAN") ~ "REP",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(party_key)) %>%
+  arrange(party_key, desc(coalesce(survey_year, 0L))) %>%   # keep latest if duplicates
+  distinct(party_key, .keep_all = TRUE) %>%
+  select(
+    party_key, party_name, party_abbrev, survey_year,
+    populism_rhetoric_0_10, populism_salience_0_10,
+    rhet_will_of_people_0_10, rhet_people_decide_0_10,
+    rhet_politicians_corrupt_0_10, rhet_strong_leader_0_10
+  )
+
+# ── U.S. state × election year scaffold ────────────────────────────────────
+us_states <- c(state.abb, "DC")                 # include DC if desired
+election_years <- c(2000, 2004, 2008, 2012, 2016, 2020)
+
+state_year <- tidyr::expand_grid(
+  state = us_states,
+  year  = election_years
+)
+
+# ── PARTY PANEL: replicate GPS scores to each state×year ───────────────────
+party_panel <- state_year %>%
+  crossing(party_key = c("DEM","REP")) %>%
+  left_join(gps_us, by = "party_key") %>%
+  select(
+    state, year, party_key,
+    party_name, party_abbrev, survey_year,
+    populism_rhetoric_0_10, populism_salience_0_10,
+    rhet_will_of_people_0_10, rhet_people_decide_0_10,
+    rhet_politicians_corrupt_0_10, rhet_strong_leader_0_10
+  ) %>%
+  arrange(state, year, party_key)
+
+# ── Read & rename GPD (leader level) ───────────────────────────────────────
+gpd_raw <- readr::read_csv(gpd_path, show_col_types = FALSE)
+
+gpd <- gpd_raw %>%
+  rename(
+    country_name        = any_of(c("Country","country")),
+    leader_name         = any_of(c("Leader","leader")),
+    leader_term         = any_of(c("term","Term")),
+    term_start          = any_of(c("startofterm","term_start")),
+    term_end            = any_of(c("endofterm","term_end")),
+    populism_leader_0_2 = any_of(c("totalaverage","TotalAverage"))
+  ) %>%
+  mutate(
+    populism_leader_0_10 = populism_leader_0_2 * 5,
+    country_name = norm_upper(country_name),
+    leader_name  = str_squish(leader_name)
+  ) %>%
+  filter(country_name %in% c("UNITED STATES","UNITED STATES OF AMERICA"))
+
+# Map election-year winners
+winners <- tibble::tribble(
+  ~year, ~leader_winner,
+  2000, "George W. Bush",
+  2004, "George W. Bush",
+  2008, "Barack Obama",
+  2012, "Barack Obama",
+  2016, "Donald Trump",
+  2020, "Joe Biden",
+  2024, "Donald Trump"
+) %>%
+  mutate(leader_norm = norm_name(leader_winner))
+
+leaders_key <- gpd %>%
+  mutate(leader_norm = norm_name(leader_name)) %>%
+  select(leader_norm, leader_name, leader_term, term_start, term_end,
+         populism_leader_0_2, populism_leader_0_10) %>%
+  distinct()
+
+leader_panel <- state_year %>%
+  left_join(winners, by = "year") %>%
+  left_join(leaders_key, by = "leader_norm") %>%
+  select(
+    state, year,
+    leader_winner,
+    populism_leader_0_2, populism_leader_0_10,
+    leader_term, term_start, term_end
+  ) %>%
+  arrange(state, year)
+
+# ── Save ───────────────────────────────────────────────────────────────────
+readr::write_csv(party_panel,  out_party)
+readr::write_csv(leader_panel, out_leader)
+cat("✓ Wrote:\n  -", out_party, "\n  -", out_leader, "\n")
+
+```
+
+# combine 
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(purrr)
+
+# =========================================================
+# 0) Load your two U.S. files we already created earlier
+# =========================================================
+state_party <- read_csv("Global Party Survey by Party SPSS V2_1_Apr_2020-2.csv", show_col_types = FALSE)
+state_cand  <- read_csv("gpd_v2_20220427.csv", show_col_types = FALSE)
+
+# Quick peek
+colnames(state_party)
+colnames(state_cand)
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+
+## ---- GPS: party-level --------------------------------------------
+# gps is your raw GPS party file (after loading)
+gps_renamed <- gps %>%
+  rename(
+    country_iso3             = ISO,
+    country_name             = COUNTRY,
+    party_name               = PARTYNAME,
+    party_abbrev             = PARTYABB,
+    populism_rhetoric_0_10   = V8_Scale,  # 0–10: more = more populist
+    populism_salience_0_10   = V9,        # 0–10: importance/salience of populism
+    rhet_will_of_people_0_10 = V18,       # components of populist rhetoric
+    rhet_people_decide_0_10  = V19,
+    rhet_politicians_corrupt_0_10 = V20,
+    rhet_strong_leader_0_10  = V21,
+    n_experts                = Experts,
+    n_experts_min            = Min_experts
+  ) %>%
+  # minor cleanups (optional)
+  mutate(
+    party_name   = str_squish(party_name),
+    party_abbrev = toupper(party_abbrev)
+  )
+
+## ---- GPD: leader-level -------------------------------------------
+# gpd is your raw GPD leader-term file (after loading)
+gpd_renamed <- gpd %>%
+  rename(
+    country_name              = Country,
+    leader_name               = Leader,
+    leader_term               = term,
+    term_start                = startofterm,
+    term_end                  = endofterm,
+    populism_leader_0_2       = totalaverage  # 0–2 scale
+  ) %>%
+  mutate(
+    populism_leader_0_10 = populism_leader_0_2 * 5  # rescale to 0–10 to match GPS
+  )
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(purrr)
+
+# =========================================================
+# 0) Load your two U.S. files we already created earlier
+# =========================================================
+state_party <- read_csv("Global Party Survey by Party SPSS V2_1_Apr_2020-2.csv", show_col_types = FALSE)
+state_cand  <- read_csv("gpd_v2_20220427.csv", show_col_types = FALSE)
+
+# Quick peek
+# colnames(state_party)
+# colnames(state_cand)
+
+# =========================================================
+# 1) PARTY-LEVEL POPULISM
+#    party_populism_scores.csv should have: country, party_name, year, pop_score
+#    Example party_name values to keep: "Democratic Party", "Republican Party"
+#    Source suggestion: V-Party or POPPA. Keep U.S. rows only.
+# =========================================================
+party_scores_raw <- read_csv("party_populism_scores.csv", show_col_types = FALSE) %>%
+  filter(str_to_upper(country) %in% c("UNITED STATES","USA","US"))
+
+# Map our DEM/REP to the external party labels you use in party_scores_raw
+party_crosswalk <- tibble(
+  party3    = c("DEM",              "REP"),
+  party_ext = c("Democratic Party", "Republican Party")
+)
+
+# For each party, choose the closest score to the election year,
+# with a preference for "at or before".
+nearest_party_score <- function(scores_df, election_year){
+  # scores_df must have year, pop_score
+  if(nrow(scores_df) == 0) return(NA_real_)
+  # distance, preferring prior
+  scores_df %>%
+    mutate(
+      dist  = abs(year - election_year),
+      prior = as.integer(year <= election_year)
+    ) %>%
+    arrange(desc(prior), dist) %>%
+    slice(1) %>%
+    pull(pop_score) %>%
+    as.numeric()
+}
+
+party_scores_prep <- party_scores_raw %>%
+  select(party_ext = party_name, year, pop_score) %>%
+  mutate(party_ext = str_squish(party_ext))
+
+# Expand state_party to long (DEM/REP rows) so we can attach party scores neatly
+party_long <- state_party %>%
+  select(year, state_po, DEM, REP, OTHER, dem_share, rep_share, other_share,
+         dem_two_party, rep_two_party) %>%
+  pivot_longer(
+    cols      = c(DEM, REP),
+    names_to  = "party3",
+    values_to = "party_votes"
+  )
+
+# Attach external label and match the nearest score by year per party
+party_with_scores <- party_long %>%
+  left_join(party_crosswalk, by = "party3") %>%
+  group_by(party3, party_ext) %>%
+  # For speed, pre-nest the external scores for each party once
+  mutate(scores_list = list(party_scores_prep %>% filter(party_ext == unique(party_ext)))) %>%
+  ungroup() %>%
+  rowwise() %>%
+  mutate(
+    party_pop_score = nearest_party_score(scores_list[[1]], year)
+  ) %>%
+  ungroup() %>%
+  select(-scores_list)
+
+# Back to wide if you want party-specific columns
+party_scored_wide <- party_with_scores %>%
+  select(year, state_po, party3, party_pop_score) %>%
+  distinct() %>%
+  pivot_wider(
+    names_from  = party3,
+    values_from = party_pop_score,
+    names_prefix = "pop_party_"
+  )
+
+# Merge back with your original state_party
+state_party_scored <- state_party %>%
+  left_join(party_scored_wide, by = c("year","state_po"))
+
+# Write it out
+write_csv(state_party_scored, "US_state_party_shares_with_party_populism.csv")
+
+# =========================================================
+# 2) LEADER-LEVEL POPULISM (candidate/nominee)
+#    leader_populism_scores.csv should have: country, leader_name, year, pop_score
+#    We’ll map the actual nominees by year & party to the leader names in your score file.
+#    (Fill / edit the nominee table below if needed.)
+# =========================================================
+leader_scores_raw <- read_csv("leader_populism_scores.csv", show_col_types = FALSE) %>%
+  filter(str_to_upper(country) %in% c("UNITED STATES","USA","US")) %>%
+  mutate(leader_name_up = str_to_upper(str_squish(leader_name)))
+
+# Nominee crosswalk (2000–2024). Edit if your dataset uses slightly different spellings.
+us_pres_nominees <- tibble(
+  year   = c(2000,2000, 2004,2004, 2008,2008, 2012,2012, 2016,2016, 2020,2020, 2024,2024),
+  party3 = c("DEM","REP","DEM","REP","DEM","REP","DEM","REP","DEM","REP","DEM","REP","DEM","REP"),
+  candidate = c("AL GORE","GEORGE W. BUSH",
+                "JOHN KERRY","GEORGE W. BUSH",
+                "BARACK OBAMA","JOHN MCCAIN",
+                "BARACK OBAMA","MITT ROMNEY",
+                "HILLARY CLINTON","DONALD TRUMP",
+                "JOSEPH R. BIDEN JR.","DONALD TRUMP",
+                "JOSEPH R. BIDEN JR.","DONALD TRUMP")
+) %>%
+  mutate(candidate_up = str_to_upper(candidate))
+
+# If your leader data uses slightly different names (e.g. "JOE BIDEN" vs "JOSEPH R. BIDEN JR."),
+# build a small alias table here and standardize leader_scores_raw$leader_name_up to match candidate_up.
+# Example:
+alias <- tribble(
+  ~leader_name_up,            ~candidate_up,
+  "JOE BIDEN",                "JOSEPH R. BIDEN JR.",
+  "JOSEPH BIDEN",             "JOSEPH R. BIDEN JR.",
+  "GEORGE W BUSH",            "GEORGE W. BUSH",
+  "HILLARY RODHAM CLINTON",   "HILLARY CLINTON"
+)
+leader_scores_std <- leader_scores_raw %>%
+  left_join(alias, by = "leader_name_up") %>%
+  mutate(candidate_up = coalesce(candidate_up, leader_name_up))
+
+# nearest-score helper for leaders (same logic as parties)
+nearest_leader_score <- function(scores_df, election_year){
+  if(nrow(scores_df) == 0) return(NA_real_)
+  scores_df %>%
+    mutate(
+      dist  = abs(year - election_year),
+      prior = as.integer(year <= election_year)
+    ) %>%
+    arrange(desc(prior), dist) %>%
+    slice(1) %>%
+    pull(pop_score) %>%
+    as.numeric()
+}
+
+# Attach leader score to each (year, candidate)
+nominees_with_scores <- us_pres_nominees %>%
+  group_by(candidate_up) %>%
+  mutate(scores_list = list(leader_scores_std %>% filter(candidate_up == unique(candidate_up)) %>%
+                              select(year, pop_score))) %>%
+  ungroup() %>%
+  rowwise() %>%
+  mutate(leader_pop_score = nearest_leader_score(scores_list[[1]], year)) %>%
+  ungroup() %>%
+  select(year, party3, candidate_up, leader_pop_score)
+
+# Join to your state-level candidate results
+# state_cand has candidate names as they appear in MEDSL; standardize to match candidate_up
+state_cand_std <- state_cand %>%
+  mutate(candidate_up = str_to_upper(str_squish(candidate))) %>%
+  # Reduce to DEM/REP only if you want two-party comparisons:
+  mutate(party3 = case_when(
+    str_detect(candidate_up, "BUSH|TRUMP|MCCAIN|ROMNEY") ~ "REP",
+    str_detect(candidate_up, "GORE|KERRY|OBAMA|CLINTON|BIDEN") ~ "DEM",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(party3))
+
+state_cand_scored <- state_cand_std %>%
+  left_join(nominees_with_scores, by = c("year","party3","candidate_up"))
+
+# This gives you (state, year, candidate) with candidate_share and leader_pop_score.
+write_csv(state_cand_scored, "US_state_candidate_shares_with_leader_populism.csv")
+
+# If you want a single state-year-party file that contains BOTH party-level populism
+# and leader-level populism, aggregate candidate file to party-year-state, then merge:
+cand_party_level <- state_cand_scored %>%
+  group_by(year, state_po, party3) %>%
+  # If multiple candidates appear (rare), take the max leader score or weighted mean by votes
+  summarize(leader_pop_score = max(leader_pop_score, na.rm = TRUE), .groups = "drop")
+
+combined_party_and_leader <- party_with_scores %>%
+  select(year, state_po, party3, party_pop_score) %>%
+  left_join(cand_party_level, by = c("year","state_po","party3"))
+
+write_csv(combined_party_and_leader, "US_state_party_with_party_and_leader_populism.csv")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

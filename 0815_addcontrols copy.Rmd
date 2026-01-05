@@ -1,0 +1,642 @@
+---
+title: "0815_addrealinflation"
+author: "Jeremy Fang"
+date: "2025-08-15"
+output: html_document
+---
+
+```{r}
+US_DE_FR_panel <- read_csv("inflation_salience_pre_election.csv", show_col_types = FALSE)
+```
+
+```{r}
+US_DE_FR_panel
+```
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# ---------- 1) Read the updated national inflation file ----------
+# (columns like: Country, country_code, 2000, 2001, ... )
+wb_path  <- "inflation_national.csv"                 # <-- your file
+nat0 <- read_csv(wb_path, show_col_types = FALSE)
+
+year_cols <- names(nat0)[grepl("^\\d{4}$", names(nat0))]
+stopifnot(length(year_cols) > 0)
+
+# pick the country id column that exists
+ctry_col <- if ("country_code" %in% names(nat0)) "country_code" else "Country"
+
+# map to the panel’s country labels (US/DE/FR)
+to_ctry <- function(v){
+  u <- toupper(str_squish(v))
+  dplyr::case_when(
+    u %in% c("US","USA","UNITED STATES","UNITED STATES OF AMERICA") ~ "US",
+    u %in% c("DE","DEU","GERMANY","DEUTSCHLAND")                    ~ "DE",
+    u %in% c("FR","FRA","FRANCE")                                    ~ "FR",
+    TRUE ~ NA_character_
+  )
+}
+
+nat_infl <- nat0 %>%
+  transmute(country = to_ctry(.data[[ctry_col]]), dplyr::across(all_of(year_cols), as.numeric)) %>%
+  filter(!is.na(country)) %>%
+  pivot_longer(all_of(year_cols), names_to = "year", values_to = "inflation_national") %>%
+  mutate(year = as.integer(year))
+
+# ---------- 2) US state-level inflation (YoY) from BEA IRPD ----------
+bea_path <- "SASUMMARY__ALL_AREAS_1998_2024.csv"     # <-- your BEA file
+
+read_bea_state_irpd_yoy <- function(path){
+  bea0 <- read_csv(path, show_col_types = FALSE)
+  ycols <- names(bea0)[grepl("^\\d{4}$", names(bea0))]
+
+  bea <- bea0 %>%
+    filter(!is.na(GeoName),
+           GeoName != "United States",
+           str_detect(Description, regex("Implicit regional price deflator", TRUE))) %>%
+    select(GeoName, all_of(ycols)) %>%
+    pivot_longer(all_of(ycols), names_to="year", values_to="irpd_index") %>%
+    mutate(year = as.integer(year),
+           irpd_index = as.numeric(irpd_index)) %>%
+    arrange(GeoName, year) %>%
+    group_by(GeoName) %>%
+    mutate(inflation_local = 100*(irpd_index/lag(irpd_index) - 1)) %>%
+    ungroup()
+
+  # State name -> USPS
+  us_xwalk <- tibble(
+    GeoName = c(state.name, "District of Columbia"),
+    state_po = c(state.abb, "DC")
+  )
+
+  bea %>% inner_join(us_xwalk, by="GeoName") %>%
+    select(state_po, year, inflation_local)
+}
+
+us_local <- read_bea_state_irpd_yoy(bea_path)
+
+# ---------- 3) Join onto your panel ----------
+# assumes you already have US_DE_FR_panel with columns: country, state_po, year, infl_* and pop_weighted
+US_DE_FR_panel_final <- US_DE_FR_panel %>%
+  left_join(nat_infl, by = c("country","year")) %>%
+  left_join(us_local, by = c("state_po","year")) %>%
+  mutate(inflation_local = if_else(country == "US", inflation_local, NA_real_))
+
+# quick sanity checks
+US_DE_FR_panel_final %>% count(country)
+US_DE_FR_panel_final %>% count(country, has_local = !is.na(inflation_local))
+
+# optional save
+# readr::write_csv(US_DE_FR_panel_final, "US_DE_FR_panel_with_real_inflation.csv")
+
+```
+```{r}
+US_DE_FR_panel_final
+```
+
+```{r}
+mFE2 <- feols(pop_weighted ~ infl_z_3m_max | state_po + year, 
+            cluster = ~ state_po, data = US_DE_FR_panel)
+summary(mFE1)
+```
+
+```{r}
+library(dplyr)
+library(fixest)
+
+# pick the merged panel object you just built
+panel <- if (exists("US_DE_FR_panel_final")) US_DE_FR_panel_final else US_DE_FR_panel
+
+panel_use <- panel %>%
+  mutate(
+    is_us = as.integer(country == "US"),
+    infl_nat_std  = as.numeric(scale(inflation_national)),
+    infl_loc_us   = if_else(country == "US", inflation_local, NA_real_),
+    infl_loc_us_std = as.numeric(scale(infl_loc_us))
+  ) %>%
+  filter(!is.na(pop_weighted))   # keep rows with DV
+
+# ----------------------
+# Baselines & variations
+# ----------------------
+
+# M1: Baseline FE (unit + year + country), search only
+m1 <- feols(
+  pop_weighted ~ infl_z_3m_max | state_po + year + country,
+  cluster = ~ state_po, data = panel_use
+)
+
+# M2: Add national real inflation (identified with common year FE)
+m2 <- feols(
+  pop_weighted ~ infl_z_3m_max + infl_nat_std | state_po + year + country,
+  cluster = ~ state_po, data = panel_use
+)
+
+# M3: Add US local inflation (interacted so it contributes only for US rows)
+m3 <- feols(
+  pop_weighted ~ infl_z_3m_max + infl_nat_std + infl_loc_us_std:is_us |
+    state_po + year + country,
+  cluster = ~ state_po, data = panel_use
+)
+
+# M4: Allow the search effect to differ by country
+m4 <- feols(
+  pop_weighted ~ i(country, infl_z_3m_max, ref = "US") + infl_nat_std +
+    infl_loc_us_std:is_us | state_po + year,
+  cluster = ~ state_po, data = panel_use
+)
+
+# M5: Swap regressor definition (6m mean instead of 3m max)
+m5 <- feols(
+  pop_weighted ~ infl_z_6m_mean + infl_nat_std |
+    state_po + year + country,
+  cluster = ~ state_po, data = panel_use
+)
+
+# M6: Country×year FE (tightest macro control; drops national inflation)
+m6 <- feols(
+  pop_weighted ~ infl_z_3m_max | state_po + country^year,
+  cluster = ~ state_po, data = panel_use
+)
+
+etable(m1, m2, m3, m4, m5, m6, digits = 3)
+
+```
+
+```{r}
+library(dplyr)
+library(fixest)
+
+panel <- US_DE_FR_panel_final  # or your object name
+
+panel_use <- panel %>%
+  mutate(
+    is_us = as.integer(country == "US"),
+    # standardize for comparability (optional but helpful)
+    infl_z_3m_max_std = as.numeric(scale(infl_z_3m_max)),
+    infl_z_6m_mean_std = as.numeric(scale(infl_z_6m_mean)),
+    # national inflation: don't mix with country×year FE
+    infl_nat_std = as.numeric(scale(inflation_national)),
+    # local US inflation; set non-US rows to 0 then interact, so we keep all rows
+    infl_loc_us = if_else(country == "US", inflation_local, 0),
+    infl_loc_us_std = as.numeric(scale(infl_loc_us))
+  )
+
+# HEADLINE 1: within country-year comparison (tightest macro control)
+m_main <- feols(
+  pop_weighted ~ infl_z_3m_max_std | state_po + country^year,
+  cluster = ~ state_po, data = panel_use
+)
+
+# Robustness: 6m mean, same FE
+m_main6 <- feols(
+  pop_weighted ~ infl_z_6m_mean_std | state_po + country^year,
+  cluster = ~ state_po, data = panel_use
+)
+
+# HEADLINE 2 (US only): add local real inflation
+us_only <- filter(panel_use, country == "US")
+m_us <- feols(
+  pop_weighted ~ infl_z_3m_max_std + as.numeric(scale(inflation_local)) |
+    state_po + year,
+  cluster = ~ state_po, data = us_only
+)
+
+# Keep all rows but only let local inflation bite in the US
+m_all_with_us_local <- feols(
+  pop_weighted ~ infl_z_3m_max_std + infl_loc_us_std:is_us |
+    state_po + year + country,
+  cluster = ~ state_po, data = panel_use
+)
+
+etable(m_main, m_main6, m_us, m_all_with_us_local, digits = 3)
+
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+
+# Pull the NUTS code and the plain name out of "CODE:Name"
+split_geo <- function(geo) {
+  tibble(
+    geo      = geo,
+    geo_code = str_replace(geo, ":.*$", ""),
+    geo_name = str_replace(geo, "^[^:]*:", "")
+  )
+}
+
+# DE mapper: NUTS1 code -> two-letter Land code used in your panel
+to_de_state_po <- function(geo_code) {
+  code <- str_replace(geo_code, "\\s+", "")
+  dplyr::recode(code,
+    "DE1" = "BW",  # Baden-Württemberg
+    "DE2" = "BY",  # Bayern
+    "DE3" = "BE",  # Berlin
+    "DE4" = "BB",  # Brandenburg
+    "DE5" = "HB",  # Bremen
+    "DE6" = "HH",  # Hamburg
+    "DE7" = "HE",  # Hessen
+    "DE8" = "MV",  # Mecklenburg-Vorpommern
+    "DE9" = "NI",  # Niedersachsen
+    "DEA" = "NW",  # Nordrhein-Westfalen
+    "DEB" = "RP",  # Rheinland-Pfalz
+    "DEC" = "SL",  # Saarland
+    "DED" = "SN",  # Sachsen
+    "DEE" = "ST",  # Sachsen-Anhalt
+    "DEF" = "SH",  # Schleswig-Holstein
+    "DEG" = "TH",  # Thüringen
+    .default = NA_character_
+  )
+}
+
+# FR mapper: group NUTS2 prefixes into the FR letter buckets (A, B, C, …)
+# This matches the usual grouping we used earlier (FR-A … FR-J/K).
+to_fr_state_po <- function(geo_code) {
+  code <- str_replace(geo_code, "\\s+", "")
+  dplyr::case_when(
+    str_starts(code, "FR10") ~ "A",  # Île-de-France
+    str_starts(code, "FRB")  ~ "B",  # Centre – Val de Loire
+    str_starts(code, "FRC")  ~ "C",  # Bourgogne / Franche-Comté
+    str_starts(code, "FRD")  ~ "D",  # Normandie (Basse/Haute)
+    str_starts(code, "FRE")  ~ "E",  # Nord–Pas-de-Calais / Picardie
+    str_starts(code, "FRF")  ~ "F",  # Grand Est (Alsace/Champagne/Lorraine)
+    str_starts(code, "FRG")  ~ "G",  # Pays de la Loire
+    str_starts(code, "FRH")  ~ "H",  # Bretagne
+    str_starts(code, "FRI")  ~ "I",  # Nouvelle-Aquitaine (Aquitaine/PC/Limousin)
+    str_starts(code, "FRJ")  ~ "J",  # Occitanie (LR/Midi-Pyrénées)
+    str_starts(code, "FRK")  ~ "K",  # Provence-Alpes-Côte d'Azur
+    str_starts(code, "FRL")  ~ "L",  # Corse (if present)
+    TRUE ~ NA_character_
+  )
+}
+
+```
+
+```{r}
+eu_u1 <- readr::read_csv("DE_FR_unemployment.csv")  # for example
+
+unemp_de_fr <- eu_u1 %>%
+  transmute(
+    split_geo(geo),
+    year        = as.integer(TIME_PERIOD),
+    unemp_rate  = suppressWarnings(as.numeric(OBS_VALUE))
+  ) %>%
+  mutate(
+    country = case_when(
+      str_starts(geo_code, "DE") ~ "DE",
+      str_starts(geo_code, "FR") ~ "FR",
+      TRUE ~ NA_character_
+    ),
+    state_po = case_when(
+      country == "DE" ~ to_de_state_po(geo_code),
+      country == "FR" ~ to_fr_state_po(geo_code),
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(country), !is.na(state_po), !is.na(year)) %>%
+  select(country, state_po, year, unemp_rate) %>%
+  arrange(country, state_po, year)
+
+# Quick check
+unemp_de_fr %>% dplyr::count(country, state_po, sort = TRUE)
+
+```
+
+```{r}
+unemp_de_fr
+```
+```{r}
+#US_DE_FR_panel_final <- US_DE_FR_panel_final %>%
+  #left_join(unemp_de_fr, by = c("country","state_po","year"))
+
+```
+
+```{r}
+names(gdp_raw)
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+
+# --- small helpers (same mapping you’ve been using) ---
+pick_col <- function(df, choices = character(), regex = NULL, required = FALSE, label = "column") {
+  nm <- names(df); low <- tolower(nm)
+  cand <- nm[low %in% tolower(choices)]
+  if (!length(cand) && !is.null(regex)) cand <- nm[str_detect(low, tolower(regex))]
+  if (length(cand)) return(cand[1])
+  if (required) stop(sprintf("Could not find %s. Available: %s", label, paste(nm, collapse=", ")))
+  NULL
+}
+nuts_from_geo <- function(x) toupper(str_replace(x, ":.*$", ""))
+to_de_state_po <- function(nuts1) {
+  nuts1 <- nuts_from_geo(nuts1)
+  dplyr::recode(nuts1,
+    DE1="DE-BW", DE2="DE-BY", DE3="DE-BE", DE4="DE-BB", DE5="DE-HB",
+    DE6="DE-HH", DE7="DE-HE", DE8="DE-MV", DE9="DE-NI",
+    DEA="DE-NW", DEB="DE-RP", DEC="DE-SL", DED="DE-SN",
+    DEE="DE-ST", DEF="DE-SH", DEG="DE-TH", .default = NA_character_)
+}
+to_fr_state_po <- function(geo) {
+  code <- nuts_from_geo(geo)
+  ifelse(code == "FR10", "FR-A",
+         dplyr::recode(substr(code, 1, 3),
+           "FRA"="FR-A","FRB"="FR-B","FRC"="FR-C","FRD"="FR-D","FRE"="FR-E",
+           "FRF"="FR-F","FRG"="FR-G","FRH"="FR-H","FRI"="FR-I","FRJ"="FR-J",
+           .default = NA_character_))
+}
+
+# ---------- path to your Eurostat GDP CSV (the one with unit MIO_EUR) ----------
+gdp_path <- "estat_nama_10r_2gdp_filtered_en.csv"
+
+# ---------- build the nominal-GDP file ----------
+gdp_nom_de_fr <- read_csv(gdp_path, show_col_types = FALSE) %>%
+  transmute(
+    geo_code = .data[[pick_col(., c("geo"), regex="^geo", required=TRUE)]],
+    year     = as.integer(.data[[pick_col(., c("TIME_PERIOD","time","Time","year"),
+                                               regex="time|period|year", required=TRUE)]]),
+    gdp_nominal = suppressWarnings(as.numeric(
+      .data[[pick_col(., c("OBS_VALUE","Observation value","value"),
+                       regex="obs|value", required=TRUE)]]
+    ))
+  ) %>%
+  filter(str_starts(geo_code, "DE") | str_starts(geo_code, "FR"),
+         !is.na(year), !is.na(gdp_nominal)) %>%
+  mutate(
+    country  = if_else(str_starts(geo_code, "DE"), "DE", "FR"),
+    state_po = if_else(country == "DE", to_de_state_po(geo_code), to_fr_state_po(geo_code))
+  ) %>%
+  filter(!is.na(state_po)) %>%
+  select(country, state_po, year, gdp_nominal) %>%
+  arrange(country, state_po, year)
+
+```
+
+```{r}
+gdp_nom_de_fr
+```
+
+```{r}
+# save as a stand-alone file
+write_csv(gdp_nom_de_fr, "de_fr_gdp_nominal.csv")
+```
+
+```{r}
+# read back if needed:
+# unemp_de_fr <- read_csv("de_fr_unemployment_clean.csv", show_col_types = FALSE)
+
+unemp_gdp_de_fr <- unemp_de_fr %>%
+  left_join(gdp_nom_de_fr, by = c("country","state_po","year"))
+
+# optional: save the merged control file
+write_csv(unemp_gdp_de_fr, "de_fr_unemp_plus_gdp_nominal.csv")
+
+# quick peek
+unemp_gdp_de_fr %>% arrange(country, state_po, year) %>% print(n = 30)
+
+```
+
+```{r}
+unemp_gdp_de_fr<-unemp_gdp_de_fr%>%
+  rename(gdp_nominal_eur=gdp_nominal)
+```
+
+```{r}
+write_csv(unemp_gdp_de_fr, "de_fr_unemp_plus_gdp_nominal.csv")
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# ---- path to your BEA file ----
+bea_path <- "SASUMMARY__ALL_AREAS_1998_2024.csv"  # change path if needed
+
+# helper for state name -> postal
+state_to_po <- setNames(c(state.abb, "DC"),
+                        c(state.name, "District of Columbia"))
+
+# read & tidy
+gdp_us_states <- read_csv(bea_path, show_col_types = FALSE) %>%
+  # keep the nominal GDP line for each state
+  filter(
+    str_detect(Description, regex("^\\s*Gross\\s+domestic\\s+product\\s*\\(GDP\\)", ignore_case = TRUE)),
+    str_detect(Unit, regex("Millions of current dollars", ignore_case = TRUE)),
+    # keep state rows (GeoFIPS like "01000", "11000" for DC, etc.)
+    str_detect(GeoFIPS, "^[0-9]{2}000$")
+  ) %>%
+  # identify 4-digit year columns (1998…2024 in this file)
+  pivot_longer(cols = matches("^(19|20)\\d{2}$"),
+               names_to = "year", values_to = "gdp_nominal_millions") %>%
+  mutate(
+    year = as.integer(year),
+    # BEA cells are "Millions of current dollars"; parse numbers (drops commas/NA text)
+    gdp_nominal_millions = readr::parse_number(gdp_nominal_millions),
+    state_name = str_squish(GeoName),
+    state_po   = recode(state_name, !!!state_to_po),
+    country    = "US"
+  ) %>%
+  filter(!is.na(state_po)) %>%
+  select(country, state_po, year, gdp_nominal_millions) %>%
+  arrange(state_po, year) %>%
+  mutate(gdp_nominal_billions = gdp_nominal_millions / 1000)
+
+# quick peek
+gdp_us_states %>% dplyr::slice_head(n = 10)
+
+# optional: save
+readr::write_csv(gdp_us_states, "us_state_gdp_nominal_1998_2024_from_SASUMMARY.csv")
+
+# ---- join to your panel ----
+# US_DE_FR_panel_final <- US_DE_FR_panel_final %>%
+#   left_join(gdp_us_states, by = c("country","state_po","year"))
+
+```
+```{r}
+fx_usd_per_eur <- 1.1688  # ECB 2025-08-15
+
+gdp_us_states<-gdp_us_states%>%
+  mutate(gdp_nominal_eur=gdp_nominal_millions/fx_usd_per_eur)
+
+  
+```
+
+
+```{r}
+write_csv(gdp_us_states, "us_state_gdp_nominal.csv")
+
+```
+
+```{r}
+gdp_us_states
+```
+
+```{r}
+US_unemp <- read_csv("us_state_unemployment_annual_from_annavg.csv", show_col_types = FALSE)
+
+```
+
+```{r}
+unemp_gdp_US <- gdp_us_states %>%
+  left_join(US_unemp, by = c("country","state_po","year"))
+```
+
+```{r}
+unemp_gdp_US<-unemp_gdp_US%>%
+  select(country,state_po,year,gdp_nominal_eur,unemp_rate)
+```
+
+```{r}
+unemp_gdp_US_DE_FR<-bind_rows(unemp_gdp_US,unemp_gdp_de_fr)%>%
+  arrange(year, country, state_po)
+  
+unemp_gdp_US_DE_FR
+```
+
+```{r}
+panel_plus <-
+  US_DE_FR_panel %>%
+  dplyr::mutate(
+    country  = toupper(as.character(country)),
+    state_po = as.character(state_po),
+    year     = as.integer(year)
+  ) %>%
+  dplyr::left_join(
+    unemp_gdp_US_DE_FR %>%                         # <- your combined file
+      dplyr::mutate(
+        country  = toupper(as.character(country)),
+        state_po = as.character(state_po),
+        year     = as.integer(year)
+      ),
+    by = c("country","state_po","year")
+  )
+
+```
+
+```{r}
+write_csv(panel_plus,"panel_plus_US_FR_DE.csv")
+panel_plus
+```
+
+```{r}
+# ============================================================
+# Regressions of populism on inflation with macro controls
+# (single self-contained chunk)
+# ============================================================
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(fixest)
+  library(stringr)
+})
+
+# --- 0) Pick the joined panel object -----------------------------------------
+# Use your merged panel; change the name here if needed.
+panel <- if (exists("panel_plus")) {
+  panel_plus
+} else if (exists("US_DE_FR_panel_final")) {
+  US_DE_FR_panel_final
+} else if (exists("US_DE_FR_panel")) {
+  US_DE_FR_panel
+} else {
+  stop("Couldn't find the merged panel. Please create `panel_plus` (or US_DE_FR_panel_final).")
+}
+
+# Quick sanity check of columns we’ll use
+need_cols <- c("country","state_po","year","pop_weighted",
+               "infl_z_prev_month","infl_z_3m_mean","infl_z_6m_mean","infl_z_3m_max")
+stopifnot(all(need_cols %in% names(panel)))
+
+# --- 1) Prepare analysis frame -----------------------------------------------
+df <- panel %>%
+  # choose which inflation regressor to highlight as the "main" one
+  mutate(
+    infl_x        = infl_z_3m_max,         # <— switch to infl_z_6m_mean or others for variants
+    log_gdp       = if ("gdp_nominal_eur" %in% names(.)) log1p(gdp_nominal_eur) else NA_real_,
+    is_us         = country == "US",
+    # US-only local inflation if present in the data (NA elsewhere)
+    infl_loc_us_std = if ("inflation_local" %in% names(.))
+      ifelse(is_us, as.numeric(scale(inflation_local)), NA_real_) else NA_real_
+  ) %>%
+  # standardize covariates that enter linearly
+  mutate(
+    infl_x_std       = as.numeric(scale(infl_x)),
+    unemp_rate_std   = if ("unemp_rate" %in% names(.)) as.numeric(scale(unemp_rate)) else NA_real_,
+    log_gdp_std      = if (!all(is.na(log_gdp))) as.numeric(scale(log_gdp)) else NA_real_
+  )
+
+# Keep rows we can actually use (no missing outcome or key FE)
+df <- df %>%
+  filter(!is.na(pop_weighted),
+         !is.na(state_po), !is.na(year), !is.na(country))
+
+# --- 2) Models ---------------------------------------------------------------
+
+# Baseline: inflation only, with state FE and country×year FE
+m1 <- feols(
+  pop_weighted ~ infl_x_std | state_po + i(country, year),
+  data = df, cluster = ~ state_po
+)
+
+# Add macro controls (if available)
+m2 <- feols(
+  pop_weighted ~ infl_x_std +
+    i(!all(is.na(unemp_rate_std)), unemp_rate_std, ref = FALSE) +
+    i(!all(is.na(log_gdp_std)),    log_gdp_std,    ref = FALSE)
+  | state_po + i(country, year),
+  data = df, cluster = ~ state_po
+)
+
+# Add US-only local inflation (if present)
+m3 <- feols(
+  pop_weighted ~ infl_x_std +
+    i(!all(is.na(unemp_rate_std)), unemp_rate_std, ref = FALSE) +
+    i(!all(is.na(log_gdp_std)),    log_gdp_std,    ref = FALSE) +
+    i(TRUE, infl_loc_us_std, ref = FALSE)  # ref=FALSE keeps term only if not all NA
+  | state_po + i(country, year),
+  data = df, cluster = ~ state_po
+)
+
+# Robustness: swap inflation proxy (e.g., use 6-month mean)
+m4 <- feols(
+  pop_weighted ~ as.numeric(scale(infl_z_6m_mean)) +
+    i(!all(is.na(unemp_rate_std)), unemp_rate_std, ref = FALSE) +
+    i(!all(is.na(log_gdp_std)),    log_gdp_std,    ref = FALSE) +
+    i(TRUE, infl_loc_us_std, ref = FALSE)
+  | state_po + i(country, year),
+  data = df, cluster = ~ state_po
+)
+
+# Optional: two-way clustering by state and year (show on m2)
+m2_tw <- feols(
+  pop_weighted ~ infl_x_std +
+    i(!all(is.na(unemp_rate_std)), unemp_rate_std, ref = FALSE) +
+    i(!all(is.na(log_gdp_std)),    log_gdp_std,    ref = FALSE)
+  | state_po + i(country, year),
+  data = df,
+  vcov = ~ state_po + year
+)
+
+# --- 3) Output table ---------------------------------------------------------
+etable(
+  list(m1, m2, m3, m4, m2_tw),
+  headers = c("Baseline","+ Controls","US local infl.","Swap infl.","+ 2-way SEs"),
+  keep = c("infl_", "unemp_", "log_gdp", "infl_loc"),
+  se.below = TRUE, digits = 3, signif.code = TRUE
+)
+
+# --- 4) Quick diagnostics ----------------------------------------------------
+message("Rows used in m2: ", nobs(m2))
+print(df %>% count(country, year) %>% summarise(min_regions = min(n), .groups="drop"))
+
+```
+
